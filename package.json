@@ -4,6 +4,7 @@
   "description": "A structure synth clone",
   "main": "mega-structure.js",
   "scripts": {
+    "start": "node dev-server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -34,5 +35,9 @@
     "uglifyify": "^3.0.1",
     "vinyl-source-stream": "^1.1.0",
     "watchify": "^3.7.0"
+  },
+  "devDependencies": {
+    "express": "^4.13.4",
+    "serve-index": "^1.7.3"
   }
 }
