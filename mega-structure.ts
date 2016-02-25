@@ -27,6 +27,7 @@
 
 ///<reference path="typings/tsd.d.ts"/>
 var glmat = require('./bower_components/gl-matrix/dist/gl-matrix-min.js');
+var tinycolor = require('./bower_components/tinycolor/tinycolor.js');
 import EisenScripts = require('./examples-generated');
 import ShapeInstance = require('./structure');
 
@@ -54,13 +55,16 @@ function CreateGeometry(structure: ShapeInstance[]): THREE.Geometry {
 	for (var si = 0; si < structure.length; ++si) {
 		for (var vi = 0; vi < 8; ++vi) {
 			var vert = [0, 0, 0, 0];
-			glmat.vec4.transformMat4(vert, [vertices[3 * vi], vertices[3 * vi + 1], vertices[3 * vi + 2], 1], structure[si].geospace);
+			glmat.vec4.transformMat4(vert, [vertices[3 * vi] - 0.5, vertices[3 * vi + 1] - 0.5, vertices[3 * vi + 2] - 0.5, 1], structure[si].geospace);
 			geometry.vertices.push(new THREE.Vector3(vert[0], vert[1], vert[2]));
 		}
 		var tris = [];
 		for (var fi = 0; fi < 12; ++fi) {
+			var face = new THREE.Face3(triangles[3 * fi] + si * 8, triangles[3 * fi + 1] + si * 8, triangles[3 * fi + 2] + si * 8);
+			var rgb = tinycolor(structure[si].colorspace).toRgb();
+			face.color = new THREE.Color(rgb.r / 255, rgb.g / 255, rgb.b / 255);
 			geometry.faces.push(
-				new THREE.Face3(triangles[3 * fi] + si * 8, triangles[3 * fi + 1] + si * 8, triangles[3 * fi + 2] + si * 8)
+				face
 			);
 		}
 	}
@@ -74,7 +78,7 @@ var app: ng.IModule = angular.module('MegaStructure.App', ['ui.codemirror']);
 
 app.controller('CodemirrorCtrl', ['$scope', function($scope) {	
 	$scope.examples = Object.keys(EisenScripts);
-	$scope.example = 'menger';
+	$scope.example = 'mondrian';
 	$scope.exampleChanged = function() {
 		$scope.cmModel = EisenScripts[$scope.example];
 	}
@@ -129,8 +133,7 @@ window.onload = () => {
 
 	var material =
 		new THREE.MeshPhongMaterial({
-			color: 0x156289,
-			emissive: 0x072534,
+			vertexColors: THREE.FaceColors,
 			side: THREE.DoubleSide,
 			shading: THREE.FlatShading
 		});
@@ -168,8 +171,6 @@ window.onload = () => {
 		var dt = (timeNow - lastTime) / (60 * 1000);
 		theta += 2 * Math.PI * 5 * dt
 		
-		
-
 		mesh.rotation.x = theta;
 		mesh.rotation.y = theta;
 

@@ -28,10 +28,12 @@
 ///<reference path="typings/tsd.d.ts"/>
 var eisenscript = require('./eisen-script');
 var glmat = require('./bower_components/gl-matrix/dist/gl-matrix-min.js');
+var tinycolor = require('./bower_components/tinycolor/tinycolor.js');
 
 import ShapeInstance = require('./structure');
 import collections = require('./node_modules/typescript-collections/collections');
 
+debugger;
 enum Axis { X, Y, Z };
 
 interface ASTNode {
@@ -81,11 +83,49 @@ interface MatrixNode extends ASTNode {
 	m: number[];
 }
 
+interface ColorNode extends ASTNode {
+	r: number;
+	g: number;
+	b: number;
+}
+
+interface HueNode extends ASTNode {
+	h: number;
+}
+
+interface SatNode extends ASTNode {
+	s: number;
+}
+
+interface BrightnessNode extends ASTNode {
+	v: number;
+}
+
+interface AlphaNode extends ASTNode {
+	a: number;
+}
+
 interface SynthFrame {
 	rule: string;
-	depth: number;
+	globaldepth: number;
+	ruledepth: number;
 	geospace: Float32Array;
-	colorspace: Float32Array;
+	colorspace: ColorFormats.HSVA;
+}
+
+function clamp(value: number, min : number, max : number) : number {
+	return Math.min(Math.max(value, min), max);
+};
+
+function normalizeAngle(angle: number, lower: number) {
+	var upper = lower + 360;
+	while (angle < lower) {
+		angle += 360;
+	}
+	while (angle > upper) {
+		angle -= 360;
+	}
+	return angle;
 }
 
 class Synthesizer {
@@ -94,6 +134,8 @@ class Synthesizer {
 		// TODO: seed RNG ?
 		this.ast = <ASTNode[]>eisenscript.parse(script);
 		this.index = Synthesizer.indexRules(this.ast);
+		//this.maxDepth = 10000000;
+		//this.maxObjects = 16000;
 	}
 
 	private static indexRules(ast: ASTNode[]): collections.Dictionary<string, [number, DefStatement[]]> {		
@@ -154,7 +196,7 @@ class Synthesizer {
 	
 		var stack = new collections.Stack<SynthFrame>();
 
-		this.synthProduction(prod, 0, glmat.mat4.create(), glmat.mat4.create(), stack, shapes);
+		this.synthProduction(prod, 0, 0, glmat.mat4.create(), tinycolor("RED").toHsv(), stack, shapes);
 		
 		while (!stack.isEmpty()) {
 
@@ -165,38 +207,40 @@ class Synthesizer {
 
 			// TODO: Report progress here
 
-			// stack.size() isn't the depth
-			if (stack.size() >= this.maxDepth) {
+			var { rule, globaldepth, ruledepth, geospace, colorspace } = stack.pop();
+
+			if (globaldepth >= this.maxDepth) {
 				continue;
 			}
 
-			var {rule, depth, geospace, colorspace} = stack.pop();
-
 			var clause = this.pickClause(rule);
 
-			var localMaxDepth = clause.maxdepth;
-			if (localMaxDepth >= 0 && depth >= localMaxDepth) {
+			if (clause.maxdepth >= 0 && ruledepth >= clause.maxdepth) {
 				if (clause.failover) {
-					stack.push({ rule: clause.failover, depth: 0, geospace, colorspace });
+					stack.push({ rule: clause.failover, globaldepth: globaldepth + 1, ruledepth: 0, geospace, colorspace });
 				}
 				continue;
 			}
 
+			++globaldepth;
+
 			for (var pi = 0; pi < clause.production.length; ++pi) {
 
-				// TODO: double check geospace & colorspace are unchanged between calls, take a copy if needed
+				// if we swtich to a new rule, reset the 
+				var samerule = rule == clause.production[pi].next.name;
 
-				this.synthProduction(clause.production[pi], depth + 1, geospace, colorspace, stack, shapes);
+				this.synthProduction(clause.production[pi], globaldepth, samerule ? ruledepth+1 : 0, geospace, colorspace, stack, shapes);
 			}
 		}
 	}
 
-	private synthProduction(prod: InvocStatement, 
-						depth: number, 
-						geospace: Float32Array, 
-						colorspace: Float32Array, 
-						stack: collections.Stack<SynthFrame>, 
-						shapes: ShapeInstance[]) : void {
+	private synthProduction(prod: InvocStatement,
+							globaldepth: number,
+							ruledepth: number, 
+							geospace: Float32Array, 
+							colorspace: ColorFormats.HSVA, 
+							stack: collections.Stack<SynthFrame>, 
+							shapes: ShapeInstance[]) : void {
 
 		var [childGeospaces, childColorspaces] = this.transform(prod.transformations, geospace, colorspace);
 
@@ -210,18 +254,18 @@ class Synthesizer {
 				break;
 			case "call":
 				for (var mi = 0; mi < childGeospaces.length; ++mi) {
-					stack.push({ rule: prod.next.name, depth, geospace: childGeospaces[mi], colorspace: childColorspaces[mi] });
+					stack.push({ rule: prod.next.name, globaldepth, ruledepth, geospace: childGeospaces[mi], colorspace: childColorspaces[mi] });
 				}
 				break;
 		}
 	}
 
-	private transform(transforms: Transformation[], geospace: Float32Array, colorspace: Float32Array): [Float32Array[], Float32Array[]] {
+	private transform(transforms: Transformation[], geospace: Float32Array, colorspace: ColorFormats.HSVA): [Float32Array[], ColorFormats.HSVA[]] {
 				
 		var childGeospaces = new Array<Float32Array>();
-		var childColorspaces = new Array<Float32Array>();
+		var childColorspaces = new Array<ColorFormats.HSVA>();
 
-		var stack = new collections.Stack<[number, Float32Array, Float32Array]>();
+		var stack = new collections.Stack<[number, Float32Array, ColorFormats.HSVA]>();
 		stack.push([0, geospace, colorspace]);
 		while (!stack.isEmpty()) {
 			var [ti, childGeospace, childColorSpace] = stack.pop();
@@ -240,10 +284,10 @@ class Synthesizer {
 		return [childGeospaces, childColorspaces];
 	}
 
-	private transformOne(sequence: ASTNode[], geospace: Float32Array, colorspace: Float32Array): [Float32Array, Float32Array] {
+	private transformOne(sequence: ASTNode[], geospace: Float32Array, colorspace: ColorFormats.HSVA): [Float32Array, ColorFormats.HSVA] {
 
 		var childGeospace = new Float32Array(geospace);
-		var childColorspace = new Float32Array(colorspace);
+		var childColorspace = { h: colorspace.h, s: colorspace.s, v: colorspace.v, a: colorspace.a };
 
 		for (var si = 0; si < sequence.length; ++si) {
 			switch (sequence[si].type) {
@@ -280,7 +324,26 @@ class Synthesizer {
 
 					glmat.mat4.multiply(childGeospace, childGeospace, m);
 					break;
-				// TODO colorspace			
+				case "color":
+					var color = <ColorNode>sequence[si];
+					childColorspace = tinycolor.fromRatio(color).toHsv();
+					break;
+				case "sat":
+					var sat = <SatNode>sequence[si];
+					childColorspace.s = clamp(childColorspace.s * sat.s, 0, 1);
+					break;
+				case "hue":	
+					var hue = <HueNode>sequence[si];
+					childColorspace.h = normalizeAngle(childColorspace.h + hue.h, 0);					
+					break;			
+				case "brightness":
+					var brightness = <BrightnessNode>sequence[si];
+					childColorspace.v = clamp(childColorspace.v * brightness.v, 0, 1);
+					break;
+				case "alpha":
+					var alpha = <AlphaNode>sequence[si];
+					childColorspace.a = clamp(childColorspace.a * alpha.a, 0, 1);
+					break;	
 			}
 		}
 
